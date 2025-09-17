@@ -1,4 +1,7 @@
 # PEACE-Net
+
+## ！！！Complete version coming soon
+
 a framework for soybean mapping without ground-truth labels
 
 
