@@ -1,0 +1,94 @@
+import math
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, pe_tau, max_seq_len=5000):
+        super().__init__()
+
+        # pe: positional encoding matrix
+        pe = torch.zeros(max_seq_len, d_model)
+        position = torch.arange(0, max_seq_len).float().unsqueeze(1)
+        divisor = -torch.exp(
+            torch.arange(0, d_model, 2).float()
+            * math.log(pe_tau) / d_model
+        )
+        pe[:, 0::2] = torch.sin(position * divisor)
+        pe[:, 1::2] = torch.cos(position * divisor)
+        # pe: (max_seq_len, d_model) => (max_seq_len, 1, d_model)
+        pe = pe.unsqueeze(0).permute((1, 0, 2))
+        self.register_buffer("pe", pe)
+
+    def forward(self, x):
+        # (sql_len, batch, d_model) + (sql_len, 1, d_model)
+        # => (sql_len, batch, d_model)
+        return x + self.pe[:x.shape[0], :, :]
+
+
+
+class Transformer_linear_attentinon(nn.Module):
+    def __init__(
+        self, seed, pe_tau, input_feature_size, d_model, nhead,
+        dim_feedforward, dropout, num_layers, seq_len
+    ):
+        super().__init__()
+        self._set_reproducible(seed)
+        
+        self.fc1 = nn.Sequential(
+            nn.Linear(input_feature_size, d_model),
+            nn.LayerNorm(d_model),
+            nn.ReLU(),
+            nn.Dropout(p=0.1)
+        )
+        
+        self.pos_encoding = PositionalEncoding(
+            d_model=d_model, pe_tau=pe_tau, max_seq_len=seq_len
+        )
+        
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model, nhead, dim_feedforward, dropout
+        )
+        
+        encoder_norm = nn.LayerNorm(d_model)
+        
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers, encoder_norm
+        )
+        
+        self.linear_attention = nn.Linear(
+            in_features=d_model, out_features=1
+        )
+        
+    
+    def _set_reproducible(self, seed, cudnn=False):
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if cudnn:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+            
+    def forward(self, x):
+        # x: (batch, seq_len, input_feature_size)
+        
+        # => (seq_len, batch, input_feature_size)
+        x = x.permute((1, 0, 2))
+        
+        # fc1_out: (seq_len, batch, d_model)
+        fc1_out = self.fc1(x)
+        
+        # encoder_in: (seq_len, batch, d_model)
+        encoder_in = self.pos_encoding(fc1_out)
+        
+        # encoder_out: (seq_len, batch, d_model)
+        encoder_out = self.encoder(encoder_in)
+        # (batch, seq_len, d_model)
+        encoder_out = encoder_out.permute((1, 0, 2))  
+        
+        attn_weights = F.softmax(F.relu(self.linear_attention(encoder_out)), dim=1)
+
+        encoder_attention_out = attn_weights.permute(0, 2, 1).bmm(encoder_out)
+        
+        return encoder_attention_out.squeeze()  # (batch, d_model)
