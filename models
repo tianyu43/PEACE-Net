@@ -1,0 +1,178 @@
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from model.transformer import Transformer_linear_attentinon, PositionalEncoding
+
+SEED = 666
+
+
+class ContrastiveTemporalModel(nn.Module):
+    def __init__(
+        self, pe_tau, input_feature_size, d_model, nhead, 
+        dim_feedforward, dropout, num_layers, seq_len, projection_dim
+        ):
+        super().__init__()
+        self._set_reproducible(SEED)
+        
+        self.encoder = Transformer_linear_attentinon(
+            seed = SEED, pe_tau = pe_tau, input_feature_size = input_feature_size, d_model = d_model, nhead = nhead, 
+            dim_feedforward = dim_feedforward, dropout = dropout, num_layers = num_layers, seq_len = seq_len
+        )
+        
+        self.projection_head = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.BatchNorm1d(d_model),
+            nn.ReLU(),
+            nn.Linear(d_model, projection_dim)
+        )
+        
+        self.classification_head = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.BatchNorm1d(d_model),
+            nn.ReLU(),
+            nn.Linear(d_model, 2)
+        )
+    
+    def _set_reproducible(self, seed, cudnn=False):
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if cudnn:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+    
+    def forward(self, x, return_class_only=False):  # x: (B, T, F)
+        # (B, D)
+        encoder_feature = self.encoder(x)                    
+        # (B, 2)
+        class_out = self.classification_head(encoder_feature)   
+        if return_class_only:
+            return class_out
+        else:
+            # (B, projection_dim)
+            proj_feature = self.projection_head(encoder_feature)               
+            contrastive_out = F.normalize(proj_feature, dim=1, p=2)         # 必须归一化用于对比学习
+            return contrastive_out, class_out, encoder_feature, proj_feature
+
+
+    def predict(self, x):
+        # (B, D)
+        encoder_feature = self.encoder(x)                    
+        # (B, 2)
+        class_out = self.classification_head(encoder_feature)
+        return class_out, encoder_feature.squeeze()
+
+
+# ============================================================================================================
+
+class DCM(nn.Module):
+    def __init__(
+        self, input_feature_size, hidden_size, num_layers,
+        bidirectional, dropout, num_classes
+    ):
+        super().__init__()
+        self._set_reproducible(SEED)
+
+        self.lstm = nn.LSTM(
+            input_size=input_feature_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            bidirectional=bidirectional,
+            batch_first=True,
+            dropout=dropout,
+        )  # i/o: (batch, seq_len, num_directions*input_/hidden_size)
+        
+        num_directions = 2 if bidirectional else 1
+        
+        self.attention = nn.Linear(
+            in_features=num_directions * hidden_size,
+            out_features=1,
+        )
+        self.fc = nn.Linear(
+            in_features=num_directions * hidden_size,
+            out_features=num_classes,
+        )
+
+    def _set_reproducible(self, seed, cudnn=False):
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if cudnn:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+
+    def forward(self, x):
+        # 为了提高内存的利用率和效率，调用flatten_parameters让parameter的数据存放成contiguous chunk(连续的块)
+        self.lstm.flatten_parameters()
+        # lstm_out: (batch, seq_len, num_directions*hidden_size)
+        lstm_out, _ = self.lstm(x)
+        # softmax along seq_len axis
+        attn_weights = F.softmax(F.relu(self.attention(lstm_out)), dim=1)
+        # attn (after permutation): (batch, 1, seq_len)
+        # .bmm()为矩阵乘法
+        fc_in = attn_weights.permute(0, 2, 1).bmm(lstm_out)
+        fc_out = self.fc(fc_in)
+        return fc_out.squeeze(), attn_weights.squeeze()
+    
+    
+    def feature_pred(self, x):
+        self.lstm.flatten_parameters()
+        # lstm_out: (batch, seq_len, num_directions*hidden_size)
+        lstm_out, _ = self.lstm(x)
+        # softmax along seq_len axis
+        attn_weights = F.softmax(F.relu(self.attention(lstm_out)), dim=1)
+        # attn (after permutation): (batch, 1, seq_len)
+        # .bmm()为矩阵乘法
+        fc_in = attn_weights.permute(0, 2, 1).bmm(lstm_out)
+        return fc_in.squeeze(), attn_weights.squeeze()
+    
+    
+# ============================================================================================================
+
+class TransformerClassifier(nn.Module):
+    def __init__(
+        self, pe_tau, input_feature_size, d_model, nhead,
+        dim_feedforward, dropout, num_layers, seq_len, num_classes
+    ):
+        super().__init__()
+        self._set_reproducible(SEED)
+        
+        self.fc1 = nn.Linear(
+            in_features=input_feature_size, out_features=d_model
+        )  # increase dimension
+        self.pos_encoding = PositionalEncoding(
+            d_model=d_model, pe_tau=pe_tau, max_seq_len=seq_len
+        )
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model, nhead, dim_feedforward, dropout
+        )
+        encoder_norm = nn.LayerNorm(d_model)
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers, encoder_norm
+        )
+        self.pool = nn.AvgPool1d(seq_len)
+        self.fc2 = nn.Linear(
+            in_features=d_model,
+            out_features=num_classes,
+        )
+    
+    def _set_reproducible(self, seed, cudnn=False):
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if cudnn:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+            
+    def forward(self, x):
+        # x: (batch, seq_len, input_feature_size)
+        # => (seq_len, batch, input_feature_size)
+        x = x.permute((1, 0, 2))
+        # fc1_out: (seq_len, batch, d_model)
+        fc1_out = self.fc1(x)
+        # encoder_in: (seq_len, batch, d_model)
+        encoder_in = self.pos_encoding(fc1_out)
+        # encoder_out: (seq_len, batch, d_model)
+        encoder_out = self.encoder(encoder_in)
+        # pool_out: (batch, d_model, 1)
+        pool_out = self.pool(encoder_out.permute((1, 2, 0)))
+        # outputs: (batch, num_classes)
+        return self.fc2(pool_out.squeeze()), pool_out.squeeze()
