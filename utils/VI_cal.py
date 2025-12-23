@@ -23,7 +23,7 @@ def calculate_gwcci(data, start_time=0, end_time=None):
     Nir   =  data[:, start_time:end_time, 7] 
     Swir1 =  data[:, start_time:end_time, 8] 
     
-    NDVI = (Nir - Red) / (Nir + Red + 1e-6)
+    NDVI = (Nir - Red) / (Nir + Red)
     
     gwcci = NDVI * Swir1 
     return gwcci
@@ -40,8 +40,8 @@ def calculate_gwcci_2(data, start_time=0, end_time=None):
     Nir   =  data[:, start_time:end_time, 7]
     Swir1 =  data[:, start_time:end_time, 8]
     
-    EVI = (G * (Nir - Red) / (Nir + C1 * Red - C2 * Blue + 1))
-    NDSVI = ((Swir1 - Red) / (Swir1 + Red + 1e-6))
+    EVI = (G * (Nir - Red) / (Nir + C1 * Red - C2 * Blue + 1 + 1e-3))
+    NDSVI = ((Swir1 - Red) / (Swir1 + Red))
     
     gwcci2 = EVI * NDSVI
     return gwcci2
@@ -63,7 +63,7 @@ def calculate_SMCI(data, start_time=0, end_time=None):
     Nir  =     data[:, start_time:end_time, 7]
     Swir1 =    data[:, start_time:end_time, 8]
     
-    EVI  = (G * (Nir - Red) / (Nir + C1 * Red - C2 * Blue + 1))
+    EVI  = (G * (Nir - Red) / (Nir + C1 * Red - C2 * Blue + 1 + 1e-3))
     #GCVI = np.where(Green != 0, (Nir / Green) - 1, 0.0)
     GCVI =  (Nir / Green) - 1
     SMCI = (Swir1 + Nir + Re2 + Re3 + Re4) * EVI * GCVI
@@ -161,3 +161,4 @@ def get_pseudo_label_with_threshold(data, vi='gwcci',
 
     
     return pseudo_labels
+
