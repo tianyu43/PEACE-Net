@@ -1,0 +1,55 @@
+{
+    "/": "===========================================model setting=============================================",
+    "seed": 128,
+    "train_size": 0.01,
+    "val_size": 0.5,
+
+    "seq_len": 22,
+    "in_channels": 10,
+    "num_classes": 2,
+
+    "weight_classification": 0.5,
+    "weight_contrastive": 0.5,
+    
+
+    "//": "=====================================optimaizer================================================",
+    "EPOCHS": 50,
+    "lr": 0.00005,
+    "weight_decay": 0.0005,
+    "momentum": 0.9,
+    "lr_scheduler": "step",
+
+    "///": "===================================== scheduler ===============================================",
+    "UPDATE_STEP": 2,
+    "warmup_epochs": 5,
+    "temperature": 0.8,
+    "use_soft_prob_update": true,
+    
+
+    "////": "=======================================transformer settings===========================================",
+    "pe_tau": 64,
+    "d_model": 128,
+    "dim_feedforward": 512,
+    "projection_dim": 64,
+    "nhead": 4,
+    "num_layers": 4,
+    "dropout": 0.2,
+    "pooling": "linear",
+
+    "/////": "========================================LSTM settings===========================================",
+    "LSTM_hidden_size": 64,
+    "LSTM_num_layers": 2,
+    "bidirectional": true,
+    "LSTM_dropout": 0.5,
+
+    "///////": "===================================dataloader settings===========================================",
+    "num_workers": 2,
+    "val_num_workers": 2,
+    "batch_size": 4096,
+    "val_batch_size": 4096,
+
+
+    "/////////": "=====================================others==================================================",
+    "resume": null,
+    "print_step": 50
+}
